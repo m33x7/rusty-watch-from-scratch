@@ -17,6 +17,12 @@ https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28/ESP32-S3-Touch-LCD-1.28
 ### Useful commans:
 ```. $HOME/export-esp.sh``` - to source the espup
 
+```
+espflash flash target/xtensa-esp32s3-espidf/debug/rusty-watch-from-scratch
+sudo chmod 666 /dev/ttyACM0
+espflash monitor /dev/ttyUSB0
+```
+
 ### To forward USB from Host (Windows) to WSL :
 ```
 # on Host :
