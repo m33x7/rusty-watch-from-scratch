@@ -1,14 +1,18 @@
 use std::panic;
+use anyhow::Result;
 
+use esp_idf_hal::i2c;
 use esp_idf_svc::{ eventloop::EspSystemEventLoop, hal::peripherals::Peripherals, timer::EspTaskTimerService };
 
-use esp_idf_hal::gpio::{self, PinDriver};
+use esp_idf_hal::gpio::{self, PinDriver, Pull};
 use esp_idf_hal::delay::{Delay, FreeRtos};
 use esp_idf_hal::spi::{self, config::{Config, Mode, Phase, Polarity}, SpiDeviceDriver };
 use esp_idf_hal::units::FromValueType;
 
 use display_interface_spi::SPIInterface;
 use gc9a01::{prelude::*, Gc9a01, SPIDisplayInterface};
+
+use cst816s::{TouchEvent, TouchGesture, CST816S};
 
 use embedded_graphics::{
     pixelcolor::Rgb565,
@@ -17,7 +21,7 @@ use embedded_graphics::{
     Drawable,
 };
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise, some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
@@ -35,20 +39,26 @@ fn main() {
     let _sysloop = EspSystemEventLoop::take().unwrap();
     let _timer_service = EspTaskTimerService::new().unwrap();
 
-    // Init pins
+    // Init pins for display
     let sck = pins.gpio10;
     let mosi = pins.gpio11;
     let cs = pins.gpio9;
     let dc = pins.gpio8;
     let reset = pins.gpio14;
     let backlight = pins.gpio2;
-
-    let mut delay = Delay::new_default();
-
     let cs_output = cs;
     let dc_output = PinDriver::output(dc).unwrap();
     let mut backlight_output = PinDriver::output(backlight).unwrap();
     let mut reset_output = PinDriver::output(reset).unwrap();
+
+    // Init pins for touch
+    let i2c_sda = pins.gpio6;
+    let i2c_scl = pins.gpio7;
+    let cst816s_int1 = PinDriver::input(pins.gpio5, Pull::Up).unwrap();
+    let cst816s_reset = PinDriver::output(pins.gpio13).unwrap();
+    let i2c = i2c::I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c::I2cConfig::new())?;
+
+    let mut delay = Delay::new_default();
 
     backlight_output.set_high().unwrap();
 
@@ -72,22 +82,26 @@ fn main() {
     display_driver.reset(&mut reset_output, &mut delay).ok();
     display_driver.init(&mut delay).ok();
     log::info!("Driver configured!");
+
+    let _ = display_driver.clear();
+    let style = PrimitiveStyleBuilder::new()
+        .stroke_width(2)
+        .stroke_color(Rgb565::RED)
+        .build();
+    let _ = Circle::new(Point::new(100, 100), 20)
+        .into_styled(style)
+        .draw(&mut display_driver);
+    let _ = display_driver.flush();
+
+    let mut touchpad = CST816S::new(i2c, cst816s_int1, cst816s_reset);
+    touchpad.setup(&mut delay).unwrap();
+
     loop {
-        log::info!("tick");
+        // Int pin is not used.
+        if let Some(event) = touchpad.read_one_touch_event(false) {
+            log::info!("Touch event {:?}", event);
+        }
 
-        let _ = display_driver.clear();
-
-        let style = PrimitiveStyleBuilder::new()
-            .stroke_width(2)
-            .stroke_color(Rgb565::RED)
-            .build();
-
-        let _ = Circle::new(Point::new(100, 100), 20)
-            .into_styled(style)
-            .draw(&mut display_driver);
-
-        let _ = display_driver.flush();
-
-        FreeRtos::delay_ms(1000);
+        FreeRtos::delay_ms(100);
     }
 }
