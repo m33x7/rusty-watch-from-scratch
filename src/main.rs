@@ -18,8 +18,12 @@ use embedded_graphics::{
     pixelcolor::Rgb565,
     prelude::{Point, RgbColor, Size},
     primitives::{Circle, Primitive, PrimitiveStyleBuilder, Rectangle},
+    text::{Text},
+    mono_font::{ascii::FONT_6X10, MonoTextStyle},
     Drawable,
 };
+
+mod battery;
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise, some patches to the runtime
@@ -83,16 +87,6 @@ fn main() -> anyhow::Result<()> {
     display_driver.init(&mut delay).ok();
     log::info!("Driver configured!");
 
-    let _ = display_driver.clear();
-    let style = PrimitiveStyleBuilder::new()
-        .stroke_width(2)
-        .stroke_color(Rgb565::RED)
-        .build();
-    let _ = Circle::new(Point::new(100, 100), 20)
-        .into_styled(style)
-        .draw(&mut display_driver);
-    let _ = display_driver.flush();
-
     let mut touchpad = CST816S::new(i2c, cst816s_int1, cst816s_reset);
     touchpad.setup(&mut delay).unwrap();
 
@@ -102,6 +96,21 @@ fn main() -> anyhow::Result<()> {
             log::info!("Touch event {:?}", event);
         }
 
-        FreeRtos::delay_ms(100);
+        FreeRtos::delay_ms(500);
+
+        let bat_mv = 4500; // Some fake battery voltage for now.
+        let text = format!("VBAT: {:?}", bat_mv);
+
+        let _ = display_driver.clear();
+        let style = PrimitiveStyleBuilder::new()
+            .stroke_width(2)
+            .stroke_color(Rgb565::RED)
+            .build();
+        let _ = Circle::new(Point::new(100, 100), 20)
+            .into_styled(style)
+            .draw(&mut display_driver);
+        let _ = Text::new(&text, Point::new(50, 50), MonoTextStyle::new(&FONT_6X10, Rgb565::RED))
+            .draw(&mut display_driver);
+        let _ = display_driver.flush();
     }
 }

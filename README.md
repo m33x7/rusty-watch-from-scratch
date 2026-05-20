@@ -13,6 +13,8 @@ Waveshare WIKI for this board :
 https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28 <br/>
 Board schema:
 https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28/ESP32-S3-Touch-LCD-1.28-Sch.pdf
+Battery charger ETA6098:
+https://www.eta-semi.com/wp-content/uploads/2022/03/ETA6098_V1.1.pdf
 
 ### Useful commans:
 ```. $HOME/export-esp.sh``` - to source the espup
@@ -35,7 +37,7 @@ usbipd attach --busid 2-4 --wsl
 
 # then on WSL :
 lsusb
-ls /dev/ttyACM*
+ls /dev/ttyACM0
 sudo chmod 666 /dev/ttyACM0
 ```
 
