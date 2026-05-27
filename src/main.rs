@@ -2,7 +2,13 @@ use std::panic;
 use anyhow::Result;
 
 use esp_idf_hal::i2c;
-use esp_idf_svc::{ eventloop::EspSystemEventLoop, hal::peripherals::Peripherals, timer::EspTaskTimerService };
+use esp_idf_svc::{
+    eventloop::EspSystemEventLoop,
+    hal::peripherals::Peripherals,
+    nvs::EspDefaultNvsPartition,
+    timer::EspTaskTimerService,
+    wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
+};
 
 use esp_idf_hal::gpio::{self, PinDriver, Pull};
 use esp_idf_hal::delay::{Delay, FreeRtos};
@@ -19,11 +25,12 @@ use embedded_graphics::{
     prelude::{Point, RgbColor, Size},
     primitives::{Circle, Primitive, PrimitiveStyleBuilder, Rectangle},
     text::{Text},
-    mono_font::{ascii::FONT_6X10, MonoTextStyle},
+    mono_font::{ascii::FONT_6X10, ascii::FONT_10X20, MonoTextStyle},
     Drawable,
 };
 
 mod battery;
+mod wifi_sntp;
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise, some patches to the runtime
@@ -40,7 +47,6 @@ fn main() -> anyhow::Result<()> {
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
 
-    let _sysloop = EspSystemEventLoop::take().unwrap();
     let _timer_service = EspTaskTimerService::new().unwrap();
 
     // Init pins for display
@@ -81,7 +87,7 @@ fn main() -> anyhow::Result<()> {
 
     let spi_device = SpiDeviceDriver::new(driver, Some(cs_output), &config).unwrap();
     let interface = SPIDisplayInterface::new(spi_device, dc_output);
-    let mut display_driver = Box::new(Gc9a01::new(interface, DisplayResolution240x240, DisplayRotation::Rotate180)).into_buffered_graphics();
+    let mut display_driver = Box::new(Gc9a01::new(interface, DisplayResolution240x240, DisplayRotation::Rotate270)).into_buffered_graphics();
     
     display_driver.reset(&mut reset_output, &mut delay).ok();
     display_driver.init(&mut delay).ok();
@@ -89,6 +95,21 @@ fn main() -> anyhow::Result<()> {
 
     let mut touchpad = CST816S::new(i2c, cst816s_int1, cst816s_reset);
     touchpad.setup(&mut delay).unwrap();
+
+    // Reading SNTP from WIFI
+    let sysloop      = EspSystemEventLoop::take()?;
+    let nvs          = EspDefaultNvsPartition::take()?;
+
+    // --- connect ---
+    let mut wifi = BlockingWifi::wrap(
+        EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs))?,
+        sysloop,
+    )?;
+
+    if let Ok(epoch_us) = wifi_sntp::wifi_get_timestamp(wifi) {
+        log::info!("SNTP : {}", wifi_sntp::format_time(epoch_us));
+        log::info!("RTC CLOCKS : {}", wifi_sntp::format_time(wifi_sntp::current_time_us()));
+    }
 
     loop {
         // Int pin is not used.
@@ -101,16 +122,22 @@ fn main() -> anyhow::Result<()> {
         let bat_mv = 4500; // Some fake battery voltage for now.
         let text = format!("VBAT: {:?}", bat_mv);
 
+        let time= wifi_sntp::format_time(wifi_sntp::current_time_us());
+
         let _ = display_driver.clear();
         let style = PrimitiveStyleBuilder::new()
             .stroke_width(2)
             .stroke_color(Rgb565::RED)
             .build();
-        let _ = Circle::new(Point::new(100, 100), 20)
+        let _ = Circle::new(Point::new(100, 80), 20)
             .into_styled(style)
             .draw(&mut display_driver);
         let _ = Text::new(&text, Point::new(50, 50), MonoTextStyle::new(&FONT_6X10, Rgb565::RED))
             .draw(&mut display_driver);
+
+        let _ = Text::new(&time, Point::new(80, 130), MonoTextStyle::new(&FONT_10X20, Rgb565::RED))
+            .draw(&mut display_driver);
+
         let _ = display_driver.flush();
     }
 }
