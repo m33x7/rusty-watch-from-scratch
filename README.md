@@ -1,4 +1,5 @@
 # rusty-watch-from-scratch
+Inspired by https://github.com/IniterWorker/esp32-s3-touch-lcd-1-28 . With this project I'm learning Rust and embedded development.
 
 ### Specs:
 ESP32-S3R2 - The SoC with WiFi and Bluetooth, up to 240MHz operating frequency, with onboard 2MB PSRAM (ESP32-S3 182025 R2MTL341000)

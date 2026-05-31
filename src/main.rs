@@ -18,8 +18,6 @@ use esp_idf_hal::units::FromValueType;
 use display_interface_spi::SPIInterface;
 use gc9a01::{prelude::*, Gc9a01, SPIDisplayInterface};
 
-use cst816s::{TouchEvent, TouchGesture, CST816S};
-
 use embedded_graphics::{
     pixelcolor::Rgb565,
     prelude::{Point, RgbColor, Size},
@@ -31,6 +29,7 @@ use embedded_graphics::{
 
 mod battery;
 mod wifi_sntp;
+mod touch;
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise, some patches to the runtime
@@ -49,6 +48,8 @@ fn main() -> anyhow::Result<()> {
 
     let _timer_service = EspTaskTimerService::new().unwrap();
 
+    let mut delay = Delay::new_default();
+
     // Init pins for display
     let sck = pins.gpio10;
     let mosi = pins.gpio11;
@@ -64,11 +65,7 @@ fn main() -> anyhow::Result<()> {
     // Init pins for touch
     let i2c_sda = pins.gpio6;
     let i2c_scl = pins.gpio7;
-    let cst816s_int1 = PinDriver::input(pins.gpio5, Pull::Up).unwrap();
-    let cst816s_reset = PinDriver::output(pins.gpio13).unwrap();
-    let i2c = i2c::I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c::I2cConfig::new())?;
-
-    let mut delay = Delay::new_default();
+    let mut i2c = i2c::I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c::I2cConfig::new())?;
 
     backlight_output.set_high().unwrap();
 
@@ -93,9 +90,6 @@ fn main() -> anyhow::Result<()> {
     display_driver.init(&mut delay).ok();
     log::info!("Driver configured!");
 
-    let mut touchpad = CST816S::new(i2c, cst816s_int1, cst816s_reset);
-    touchpad.setup(&mut delay).unwrap();
-
     // Reading SNTP from WIFI
     let sysloop      = EspSystemEventLoop::take()?;
     let nvs          = EspDefaultNvsPartition::take()?;
@@ -111,12 +105,10 @@ fn main() -> anyhow::Result<()> {
         log::info!("RTC CLOCKS : {}", wifi_sntp::format_time(wifi_sntp::current_time_us()));
     }
 
-    loop {
-        // Int pin is not used.
-        if let Some(event) = touchpad.read_one_touch_event(false) {
-            log::info!("Touch event {:?}", event);
-        }
+    let touch_task_data = touch::TouchTaskData { delay, i2c: &mut i2c, int1: pins.gpio5, reset: pins.gpio13 };
+    touch::touch_task(touch_task_data);
 
+    loop {
         FreeRtos::delay_ms(500);
 
         let bat_mv = 4500; // Some fake battery voltage for now.
