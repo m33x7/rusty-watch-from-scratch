@@ -1,5 +1,4 @@
 use std::panic;
-use anyhow::Result;
 
 use esp_idf_hal::i2c;
 use esp_idf_svc::{
@@ -7,31 +6,65 @@ use esp_idf_svc::{
     hal::peripherals::Peripherals,
     nvs::EspDefaultNvsPartition,
     timer::EspTaskTimerService,
-    wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
+    wifi::{BlockingWifi, EspWifi},
 };
 
-use esp_idf_hal::gpio::{self, PinDriver, Pull};
+use esp_idf_hal::gpio::{self, PinDriver};
 use esp_idf_hal::delay::{Delay, FreeRtos};
-use esp_idf_hal::spi::{self, config::{Config, Mode, Phase, Polarity}, SpiDeviceDriver };
-use esp_idf_hal::units::FromValueType;
-
-use display_interface_spi::SPIInterface;
-use gc9a01::{prelude::*, Gc9a01, SPIDisplayInterface};
-
-use embedded_graphics::{
-    pixelcolor::Rgb565,
-    prelude::{Point, RgbColor, Size},
-    primitives::{Circle, Primitive, PrimitiveStyleBuilder, Rectangle},
-    text::{Text},
-    mono_font::{ascii::FONT_6X10, ascii::FONT_10X20, MonoTextStyle},
-    Drawable,
-};
 
 mod battery;
 mod wifi_sntp;
 mod touch;
+mod display;
 
-fn main() -> anyhow::Result<()> {
+fn app_main() -> anyhow::Result<()>{
+    let peripherals = Peripherals::take().unwrap();
+    let pins: gpio::Pins = peripherals.pins;
+
+    let _timer_service = EspTaskTimerService::new().unwrap();
+
+    // Init pins for touch
+    let i2c_sda = pins.gpio6;
+    let i2c_scl = pins.gpio7;
+    let mut i2c = i2c::I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c::I2cConfig::new())?;
+
+    // Reading SNTP from WIFI
+    let sysloop      = EspSystemEventLoop::take()?;
+    let nvs          = EspDefaultNvsPartition::take()?;
+
+    // --- sync clocks over wifi ---
+    let mut wifi = BlockingWifi::wrap(
+        EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs))?,
+        sysloop,
+    )?;
+    wifi_sntp::sync_clocks(wifi);
+
+    let display_data = display::display_data {
+        sck: pins.gpio10,
+        mosi: pins.gpio11,
+        cs: pins.gpio9,
+        dc: pins.gpio8,
+        reset: pins.gpio14,
+        backlight: pins.gpio2,
+        spi2: peripherals.spi2,
+    };
+
+    let display_thread = std::thread::Builder::new()
+        .stack_size(7000 + (240 * 240 * 2) + (240 * 12))
+        .spawn(move || display::display_task(display_data))?;
+
+    display_thread.join();
+
+    Ok(())
+
+    /*
+    let touch_task_data = touch::TouchTaskData { delay, i2c: &mut i2c, int1: pins.gpio5, reset: pins.gpio13 };
+    touch::touch_task(touch_task_data);
+    */
+
+}
+
+fn main() {
     // It is necessary to call this function once. Otherwise, some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
@@ -43,93 +76,8 @@ fn main() -> anyhow::Result<()> {
         println!("PANIC: {}", info);
     }));
 
-    let peripherals = Peripherals::take().unwrap();
-    let pins = peripherals.pins;
-
-    let _timer_service = EspTaskTimerService::new().unwrap();
-
-    let mut delay = Delay::new_default();
-
-    // Init pins for display
-    let sck = pins.gpio10;
-    let mosi = pins.gpio11;
-    let cs = pins.gpio9;
-    let dc = pins.gpio8;
-    let reset = pins.gpio14;
-    let backlight = pins.gpio2;
-    let cs_output = cs;
-    let dc_output = PinDriver::output(dc).unwrap();
-    let mut backlight_output = PinDriver::output(backlight).unwrap();
-    let mut reset_output = PinDriver::output(reset).unwrap();
-
-    // Init pins for touch
-    let i2c_sda = pins.gpio6;
-    let i2c_scl = pins.gpio7;
-    let mut i2c = i2c::I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c::I2cConfig::new())?;
-
-    backlight_output.set_high().unwrap();
-
-    let driver = spi::SpiDriver::new(
-        peripherals.spi2,
-        sck,
-        mosi,
-        None::<gpio::AnyIOPin>,
-        &spi::SpiDriverConfig::new(),
-    ).unwrap();
-
-    let config = Config::new().baudrate(2.MHz().into()).data_mode(Mode {
-        polarity: Polarity::IdleLow,
-        phase: Phase::CaptureOnFirstTransition,
-    });
-
-    let spi_device = SpiDeviceDriver::new(driver, Some(cs_output), &config).unwrap();
-    let interface = SPIDisplayInterface::new(spi_device, dc_output);
-    let mut display_driver = Box::new(Gc9a01::new(interface, DisplayResolution240x240, DisplayRotation::Rotate270)).into_buffered_graphics();
-    
-    display_driver.reset(&mut reset_output, &mut delay).ok();
-    display_driver.init(&mut delay).ok();
-    log::info!("Driver configured!");
-
-    // Reading SNTP from WIFI
-    let sysloop      = EspSystemEventLoop::take()?;
-    let nvs          = EspDefaultNvsPartition::take()?;
-
-    // --- connect ---
-    let mut wifi = BlockingWifi::wrap(
-        EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs))?,
-        sysloop,
-    )?;
-
-    if let Ok(epoch_us) = wifi_sntp::wifi_get_timestamp(wifi) {
-        log::info!("SNTP : {}", wifi_sntp::format_time(epoch_us));
-        log::info!("RTC CLOCKS : {}", wifi_sntp::format_time(wifi_sntp::current_time_us()));
-    }
-
-    let touch_task_data = touch::TouchTaskData { delay, i2c: &mut i2c, int1: pins.gpio5, reset: pins.gpio13 };
-    touch::touch_task(touch_task_data);
-
-    loop {
-        FreeRtos::delay_ms(500);
-
-        let bat_mv = 4500; // Some fake battery voltage for now.
-        let text = format!("VBAT: {:?}", bat_mv);
-
-        let time= wifi_sntp::format_time(wifi_sntp::current_time_us());
-
-        let _ = display_driver.clear();
-        let style = PrimitiveStyleBuilder::new()
-            .stroke_width(2)
-            .stroke_color(Rgb565::RED)
-            .build();
-        let _ = Circle::new(Point::new(100, 80), 20)
-            .into_styled(style)
-            .draw(&mut display_driver);
-        let _ = Text::new(&text, Point::new(50, 50), MonoTextStyle::new(&FONT_6X10, Rgb565::RED))
-            .draw(&mut display_driver);
-
-        let _ = Text::new(&time, Point::new(80, 130), MonoTextStyle::new(&FONT_10X20, Rgb565::RED))
-            .draw(&mut display_driver);
-
-        let _ = display_driver.flush();
+    match app_main() {
+        Ok(()) => log::info!("terminated"),
+        Err(e) => log::error!("{:?}", e),
     }
 }
