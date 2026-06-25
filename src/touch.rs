@@ -3,17 +3,22 @@ use cst816s::Cst816s;
 use esp_idf_hal::gpio::{Gpio5, Gpio13, PinDriver, Pull};
 use esp_idf_hal::task::block_on;
 use esp_idf_hal::{delay::Delay, i2c};
-use std::sync::{Arc, Mutex};
+use esp_idf_hal::delay::{FreeRtos};
+use esp_idf_svc::sys;
+
+use std::sync::Arc;
+use crate::state;
 
 pub struct AnotherTouchTaskData<'i2c, 'a> {
     pub i2c: &'a mut i2c::I2cDriver<'i2c>
 }
 
-pub struct TouchTaskData<'i2c, 'pins, 'a> {
+pub struct TouchTaskData<'i2c, 'pins> {
     pub delay: Delay,
-    pub i2c: &'a mut i2c::I2cDriver<'i2c>,
+    pub i2c: i2c::I2cDriver<'i2c>,
     pub int1: Gpio5<'pins>,
     pub reset: Gpio13<'pins>,
+    pub state: Arc<state::State>
 }
 
 pub fn setup_touch(touch: &mut Cst816s<&mut i2c::I2cDriver<'_>, Delay>,) -> anyhow::Result<()> {
@@ -46,7 +51,7 @@ pub fn touch_task(mut data: TouchTaskData) -> anyhow::Result<()> {
     let mut int1 = PinDriver::input(data.int1, Pull::Up)?;
     let mut reset_output = PinDriver::output(data.reset)?;
 
-    let mut touch = Cst816s::new(data.i2c, data.delay);
+    let mut touch = Cst816s::new(&mut data.i2c, data.delay);
 
     touch.reset(&mut reset_output, &mut data.delay)?;
 
@@ -54,13 +59,25 @@ pub fn touch_task(mut data: TouchTaskData) -> anyhow::Result<()> {
 
     touch.dump_register();
 
+    unsafe {
+        sys::gpio_wakeup_enable(
+            int1.pin() as i32,
+            sys::gpio_int_type_t_GPIO_INTR_LOW_LEVEL, // rising-edge-equivalent for sleep wakeup
+        );
+
+        // Tell the sleep subsystem GPIO wakeup is enabled as a source
+        sys::esp_sleep_enable_gpio_wakeup();
+    }
+
     loop {
         let wait_interrupt = block_on(int1.wait_for_rising_edge());
+
         if let Err(err) = wait_interrupt {
             log::error!("waiting on interupt error: {}", err);
+        } else {
+            let event = touch.read_events();
+            log::info!("Touch event : {:?} ", event);
+            data.state.register_touch();
         }
-
-        let event = touch.read_events();
-        log::info!("Touch event : {:?} ", event);
     }
 }

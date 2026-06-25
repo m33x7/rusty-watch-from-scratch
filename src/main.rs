@@ -16,6 +16,7 @@ mod battery;
 mod wifi_sntp;
 mod touch;
 mod display;
+mod state;
 
 fn app_main() -> anyhow::Result<()>{
     let peripherals = Peripherals::take().unwrap();
@@ -23,22 +24,20 @@ fn app_main() -> anyhow::Result<()>{
 
     let _timer_service = EspTaskTimerService::new().unwrap();
 
-    // Init pins for touch
-    let i2c_sda = pins.gpio6;
-    let i2c_scl = pins.gpio7;
-    let mut i2c = i2c::I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c::I2cConfig::new())?;
+    
 
     // Reading SNTP from WIFI
     let sysloop      = EspSystemEventLoop::take()?;
     let nvs          = EspDefaultNvsPartition::take()?;
-
-    // --- sync clocks over wifi ---
     let mut wifi = BlockingWifi::wrap(
         EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs))?,
         sysloop,
     )?;
     wifi_sntp::sync_clocks(wifi);
 
+    let state = state::State::new();
+
+    // DISPLAY TASK
     let display_data = display::display_data {
         sck: pins.gpio10,
         mosi: pins.gpio11,
@@ -47,20 +46,33 @@ fn app_main() -> anyhow::Result<()>{
         reset: pins.gpio14,
         backlight: pins.gpio2,
         spi2: peripherals.spi2,
+        state: state.clone(),
     };
 
     let display_thread = std::thread::Builder::new()
         .stack_size(7000 + (240 * 240 * 2) + (240 * 12))
         .spawn(move || display::display_task(display_data))?;
 
+    // TOUCH TASK
+    let i2c_sda = pins.gpio6;
+    let i2c_scl = pins.gpio7;
+    let mut i2c = i2c::I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c::I2cConfig::new())?;
+    let touch_task_data = touch::TouchTaskData
+    {
+        delay: Delay::new_default(),
+        i2c,
+        int1: pins.gpio5,
+        reset: pins.gpio13,
+        state: state.clone()
+    };
+    let touch_thread = std::thread::Builder::new()
+        .stack_size(7000)
+        .spawn(move || touch::touch_task(touch_task_data))?;
+
     display_thread.join();
+    touch_thread.join();
 
     Ok(())
-
-    /*
-    let touch_task_data = touch::TouchTaskData { delay, i2c: &mut i2c, int1: pins.gpio5, reset: pins.gpio13 };
-    touch::touch_task(touch_task_data);
-    */
 
 }
 

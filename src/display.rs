@@ -10,6 +10,11 @@ use chrono_tz::Europe::Berlin;
 
 use gc9a01::{prelude::*, Gc9a01, SPIDisplayInterface};
 
+use esp_idf_svc::sys;
+
+use std::sync::Arc;
+use crate::state;
+
 use embedded_graphics::{
     pixelcolor::Rgb565,
     prelude::{Point, RgbColor},
@@ -27,6 +32,7 @@ pub struct display_data<'a> {
     pub reset: gpio::Gpio14<'a>,
     pub backlight: gpio::Gpio2<'a>,
     pub spi2: spi::SPI2<'a>,
+    pub state: Arc<state::State>,
 }
 
 pub fn display_task<'a>(data: display_data<'a>){
@@ -68,6 +74,8 @@ pub fn display_task<'a>(data: display_data<'a>){
 
         let time= format_time(current_time_us());
 
+        log::info!("Time: {time}");
+
         let _ = display_driver.clear();
         
         let _ = Text::new(&text, Point::new(50, 50), MonoTextStyle::new(&FONT_6X10, Rgb565::RED))
@@ -77,6 +85,15 @@ pub fn display_task<'a>(data: display_data<'a>){
             .draw(&mut display_driver);
 
         let _ = display_driver.flush();
+
+        if data.state.get_time_since_last_touch() > 3 {
+            unsafe {
+                sys::esp_light_sleep_start();
+            }
+
+            display_driver.reset(&mut reset_output, &mut delay).ok();
+            display_driver.init(&mut delay).ok();
+        }
     }
 }
 
