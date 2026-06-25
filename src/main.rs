@@ -69,8 +69,19 @@ fn app_main() -> anyhow::Result<()>{
         .stack_size(7000)
         .spawn(move || touch::touch_task(touch_task_data))?;
 
+    // BATTERY MONITOR TASK
+    let battery_monitor_data = battery::BatteryMonitorData {
+        adc1: peripherals.adc1,
+        gpio1: pins.gpio1,
+        state: state.clone()
+    };
+    let battery_monitor_thread = std::thread::Builder::new()
+        .stack_size(7000)
+        .spawn(move || battery::battery_monitor_task(battery_monitor_data))?;
+
     display_thread.join();
     touch_thread.join();
+    battery_monitor_thread.join();
 
     Ok(())
 

@@ -69,16 +69,14 @@ pub fn display_task<'a>(data: display_data<'a>){
     loop {
         FreeRtos::delay_ms(500);
 
-        let bat_mv = 4500; // Some fake battery voltage for now.
-        let text = format!("VBAT: {:?}", bat_mv);
-
+        let vbat = format_mv(data.state.get_battery_mv());
         let time= format_time(current_time_us());
 
         log::info!("Time: {time}");
 
         let _ = display_driver.clear();
         
-        let _ = Text::new(&text, Point::new(50, 50), MonoTextStyle::new(&FONT_6X10, Rgb565::RED))
+        let _ = Text::new(&vbat, Point::new(50, 50), MonoTextStyle::new(&FONT_6X10, Rgb565::RED))
             .draw(&mut display_driver);
 
         let _ = Text::new(&time, Point::new(80, 130), MonoTextStyle::new(&FONT_10X20, Rgb565::RED))
@@ -112,4 +110,11 @@ pub fn format_time(epoch_us: i64) -> String {
     let local = utc.with_timezone(&Berlin);
 
     local.format("%H:%M:%S").to_string()
+}
+
+pub fn format_mv(mv: Option<u16>) -> String {
+    match mv {
+        Some(mv) => format!("VBAT: {mv}"),
+        None => "VBAT: unknown".to_string()
+    }
 }
